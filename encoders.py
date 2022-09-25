@@ -107,7 +107,16 @@ class ENCBase(torch.nn.Module):
             this_mean    = torch.mean(x_input)
             this_std     = torch.std(x_input)
 
-            if self.args.precompute_norm_stats:
+            if self.args.use_precomputed_norm_stats:
+                # if x_input.is_cuda:
+                #      x_input = x_input.cpu()
+                 # print(self.mean_scalar.is_cuda)
+                 # print(self.std_scalar.is_cuda)
+                # model.enc.num_test_block = 10000000
+                mean_scalar = -0.0215
+                std_scalar = 0.5114
+                x_input_norm = (x_input - mean_scalar)/std_scalar
+            elif self.args.precompute_norm_stats:
                 self.num_test_block += 1.0
                 self.mean_scalar = (self.mean_scalar*(self.num_test_block-1) + this_mean)/self.num_test_block
                 self.std_scalar  = (self.std_scalar*(self.num_test_block-1) + this_std)/self.num_test_block
@@ -348,8 +357,8 @@ class ENC_interCNN(ENCBase):
         self.enc_linear_2 = torch.nn.DataParallel(self.enc_linear_2)
         self.enc_linear_3 = torch.nn.DataParallel(self.enc_linear_3)
 
-    def forward(self, inputs):
-
+    @torch.no_grad()
+    def nnOut(self, inputs):
         if self.args.is_variable_block_len:
             block_len = inputs.shape[1]
             # reset interleaver
@@ -370,11 +379,107 @@ class ENC_interCNN(ENCBase):
         x_p2       = self.enc_cnn_3(x_sys_int)
         x_p2       = self.enc_act(self.enc_linear_3(x_p2))
 
+        nnout        = torch.cat([x_sys,x_p1, x_p2], dim = 2)
+        return nnout
+
+    def forward(self, inputs):
+
+        if self.args.is_variable_block_len:
+            block_len = inputs.shape[1]
+            # reset interleaver
+            if self.args.is_interleave != 0:           # fixed interleaver.
+                seed = np.random.randint(0, self.args.is_interleave)
+                rand_gen = mtrand.RandomState(seed)
+                p_array = rand_gen.permutation(arange(block_len))
+                self.set_interleaver(p_array)
+        # print("inputs shape: ", inputs.shape)
+        # print(inputs[:,0,:])
+        inputs     = 2.0*inputs - 1.0
+        x_sys      = self.enc_cnn_1(inputs)
+        x_sys      = self.enc_act(self.enc_linear_1(x_sys))
+
+        x_p1       = self.enc_cnn_2(inputs)
+        x_p1       = self.enc_act(self.enc_linear_2(x_p1))
+
+        x_sys_int  = self.interleaver(inputs)
+        x_p2       = self.enc_cnn_3(x_sys_int)
+        x_p2       = self.enc_act(self.enc_linear_3(x_p2))
+
         x_tx       = torch.cat([x_sys,x_p1, x_p2], dim = 2)
 
         codes = self.power_constraint(x_tx)
-
+        # print("output shape: ", codes.shape)
+        # print(codes)
         return codes
+
+
+class TurboAEBinaryLinearApproxEncoder(ENCBase):
+    def __init__(self, args, p_array, boundaryApprox=False):
+        # turbofy only for code rate 1/3
+        super(TurboAEBinaryLinearApproxEncoder, self).__init__(args)
+        self.args             = args
+        self.interleaver      = Interleaver(args, p_array)
+        self.boundaryApprox = boundaryApprox
+        print('boundary approx : ', self.boundaryApprox)
+        # self.enc_cnn_1       = SameShapeConv1d(num_layer=1, in_channels=1, out_channels= 1, kernel_size = 5, activation='mod2', bias=False)
+        # self.enc_cnn_2       = SameShapeConv1d(num_layer=1, in_channels=1, out_channels= 1, kernel_size = 5, activation='mod2', bias=False)
+        # self.enc_cnn_3       = SameShapeConv1d(num_layer=1, in_channels=1, out_channels= 1, kernel_size = 5, activation='mod2', bias=False)
+        self.abcde       = SameShapeConv1d(num_layer=1, in_channels=1, out_channels= 1, kernel_size = 5, no_act=True, bias=False)
+        self.abce       = SameShapeConv1d(num_layer=1, in_channels=1, out_channels= 1, kernel_size = 5, no_act=True, bias=False)
+        self.bde       = SameShapeConv1d(num_layer=1, in_channels=1, out_channels= 1, kernel_size = 5, no_act=True, bias=False)
+        self.c        = SameShapeConv1d(num_layer=1, in_channels=1, out_channels= 1, kernel_size = 5, no_act=True, bias=False)
+        self.ace        = SameShapeConv1d(num_layer=1, in_channels=1, out_channels= 1, kernel_size = 5, no_act=True, bias=False)
+
+        abcde = torch.tensor([[[1,1,1,1,1]]]); self.invert1 = 1  # invert as well
+        abce = torch.tensor([[[1,1,1,0,1]]]); self.invert2 = 0
+        # parity3 = torch.tensor([[[0,1,1,1,1]]]); self.invert3 = 1  # invert as well
+        bde = torch.tensor([[[0,1,0,1,1]]]); self.invert3 = 0
+        # parity3 = torch.tensor([[[0,1,1,1,1]]])  # invert as well
+        # parity3 = torch.tensor([[[0,1,1,1,1]]])  # invert as well
+        c = torch.tensor([[[0,0,1,0,0]]])
+        ace = torch.tensor([[[1,0,1,0,1]]])
+
+        self.abcde.cnns[0].weight = torch.nn.Parameter(abcde.to(torch.float))
+        self.abce.cnns[0].weight = torch.nn.Parameter(abce.to(torch.float))
+        self.bde.cnns[0].weight = torch.nn.Parameter(bde.to(torch.float))
+        self.c.cnns[0].weight = torch.nn.Parameter(c.to(torch.float))
+        self.ace.cnns[0].weight = torch.nn.Parameter(ace.to(torch.float))
+
+    def set_interleaver(self, p_array):
+        self.interleaver.set_parray(p_array)
+
+    def set_parallel(self):
+        self.abcde = torch.nn.DataParallel(self.abcde)
+        self.abce = torch.nn.DataParallel(self.abce)
+        self.bde = torch.nn.DataParallel(self.bde)
+        self.c = torch.nn.DataParallel(self.c)
+        self.ace = torch.nn.DataParallel(self.ace)
+
+    def forward(self, inputs):
+        # inputs     = 2.0*inputs - 1.0
+        blk1      = self.abcde(inputs) + 1
+        blk2       = self.abce(inputs)
+        xInt  = self.interleaver(inputs)
+        bdeInt = self.bde(xInt)
+        blk3       = self.bde(xInt)
+
+        if self.boundaryApprox:
+            c = self.c(inputs)
+            ace = self.ace(inputs)
+            blk1[:,0:2] = c[:,0:2] + 1
+            blk1[:,98:100] = c[:,98:100] + 1
+            blk2[:,0:2] = ace[:,0:2] + 1
+            blk2[:,98:100] = ace[:,98:100] + 1
+            cInt = self.c(xInt)
+            blk3[:,0] = cInt[:,0] + 1
+            blk3[:,1] = bdeInt[:,1] + cInt[:,1] + 1
+            blk3[:,98:100] = cInt[:,98:100] + 1
+
+        x_tx       = torch.cat([blk1, blk2, blk3], dim = 2) % 2
+        codes = 2*x_tx -1
+        return codes
+
+
 
 #######################################################
 # TurboAE Encocder, with rate 1/3, CNN-1D same shape only

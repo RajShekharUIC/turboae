@@ -20,6 +20,7 @@ def get_args():
                                              'Turbo_rate3_757',        # Turbo Code, rate 1/3, 757.
                                              'Turbo_rate3_lte',        # Turbo Code, rate 1/3, LTE.
                                              'turboae_2int', # experimental, use multiple interleavers
+                                             'TurboAEBinaryLinearApproxEncoder',
                                             ],
                         default='TurboAE_rate3_cnn2d')
 
@@ -225,6 +226,14 @@ def get_args():
                         help='train with same code for multiple times')
     parser.add_argument('-k_same_code', type = int, default=2, help = 'add term to maxBCE loss, only wokr with maxBCE loss')
 
+
+    parser.add_argument('--boundary_approx', action='store_true', default=False,
+                        help='Approximate boundary functions with their own closet linear function')
+
+    parser.add_argument('--accurate_ber', action='store_true', default=False,
+                    help='Do heavy accurate BER computation')
+
+    parser.add_argument("--use_precomputed_norm_stats", action="store_true", default=False)
 
     args = parser.parse_args()
 

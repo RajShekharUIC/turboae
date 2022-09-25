@@ -17,6 +17,7 @@ class Channel_AE(torch.nn.Module):
         self.enc = enc
         self.dec = dec
 
+    @torch.no_grad()
     def encode(self, input):
         # Setup Interleavers.
         if self.args.is_interleave == 0:
@@ -35,7 +36,26 @@ class Channel_AE(torch.nn.Module):
 
         codes  = self.enc(input)
         return codes
-        
+
+    def nnOut(self, input):
+        # Setup Interleavers.
+        if self.args.is_interleave == 0:
+            pass
+
+        elif self.args.is_same_interleaver == 0:
+            interleaver = RandInterlv.RandInterlv(self.args.block_len, np.random.randint(0, 1000))
+
+            p_array = interleaver.p_array
+            self.enc.set_interleaver(p_array)
+
+        else:# self.args.is_same_interleaver == 1
+            interleaver = RandInterlv.RandInterlv(self.args.block_len, 0) # not random anymore!
+            p_array = interleaver.p_array
+            self.enc.set_interleaver(p_array)
+
+        nnout  = self.enc.nnOut(input)
+        return nnout
+
     def forward(self, input, fwd_noise):
         # Setup Interleavers.
         if self.args.is_interleave == 0:

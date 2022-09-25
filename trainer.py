@@ -153,26 +153,46 @@ def test(model, args, block_len = 'default',use_cuda = False):
             print('Pre-computed norm statistics mean ',model.enc.mean_scalar, 'std ', model.enc.std_scalar)
 
     ber_res, bler_res = [], []
+    ber_std_res = []
     ber_res_punc, bler_res_punc = [], []
     snr_interval = (args.snr_test_end - args.snr_test_start)* 1.0 /  (args.snr_points-1)
     snrs = [snr_interval* item + args.snr_test_start for item in range(args.snr_points)]
     print('SNRS', snrs)
     sigmas = snrs
 
+    import math
+    ber_expected = torch.tensor([1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-9, 1e-9, 1e-9])
+    num_bits = -math.log(1-0.95)/ber_expected
+    num_bits = torch.max(num_bits, torch.ones_like(num_bits)*1e+6)
+    snrIdx = -1
+    from utils import errors_ber_list
     for sigma, this_snr in zip(sigmas, snrs):
         test_ber, test_bler = .0, .0
+        num_test_batch = int(args.num_block/(args.batch_size))
+
+        test_ber_list = torch.zeros(args.num_block, dtype=torch.float)
+        snrIdx += 1
         with torch.no_grad():
             num_test_batch = int(args.num_block/(args.batch_size))
-            for batch_idx in range(num_test_batch):
-                X_test     = torch.randint(0, 2, (args.batch_size, block_len, args.code_rate_k), dtype=torch.float)
-                fwd_noise  = generate_noise(X_test.shape, args, test_sigma=sigma)
 
+            if args.accurate_ber:
+                num_test_batch = int(num_bits[snrIdx]/block_len/args.batch_size)
+                print(f'snr: {this_snr}, #bits: {num_bits[snrIdx]} #batches: {num_test_batch}')
+
+            for batch_idx in range(num_test_batch):
+                # print(f'{batch_idx}', end=' ')
+                X_test     = torch.randint(0, 2, (args.batch_size, block_len, args.code_rate_k), dtype=torch.float)
+                # fwd_noise  = generate_noise(X_test.shape, args, test_sigma=sigma)
+                noise_shape = (args.batch_size, args.block_len, args.code_rate_n)
+                fwd_noise  = generate_noise(noise_shape, args, test_sigma=sigma)
                 X_test, fwd_noise= X_test.to(device), fwd_noise.to(device)
 
                 X_hat_test, the_codes = model(X_test, fwd_noise)
 
 
                 test_ber  += errors_ber(X_hat_test,X_test)
+                test_ber_list[batch_idx*args.batch_size:(batch_idx+1)*args.batch_size] = errors_ber_list(X_hat_test,X_test)
+                # test_ber_list = test_bers.append(test_ber)
                 test_bler += errors_bler(X_hat_test,X_test)
 
                 if batch_idx == 0:
@@ -213,9 +233,12 @@ def test(model, args, block_len = 'default',use_cuda = False):
 
         test_ber  /= num_test_batch
         test_bler /= num_test_batch
-        print('Test SNR',this_snr ,'with ber ', float(test_ber), 'with bler', float(test_bler))
+        ber_std = torch.std(test_ber_list)
+        print('test_ber_list shape:', test_ber_list.shape)
+        print('Test SNR',this_snr ,'with ber ', float(test_ber), 'or ', torch.mean(test_ber_list), 'with ber_std', ber_std, 'with bler', float(test_bler))
         ber_res.append(float(test_ber))
         bler_res.append( float(test_bler))
+        ber_std_res.append(float(ber_std))
 
         try:
             test_ber_punc  /= num_test_batch
@@ -227,7 +250,8 @@ def test(model, args, block_len = 'default',use_cuda = False):
             print('No puncturation is there.')
 
     print('final results on SNRs ', snrs)
-    print('BER', ber_res)
+    print('BER =', ber_res)
+    print('BER_std =', ber_std_res)
     print('BLER', bler_res)
     print('final results on punctured SNRs ', snrs)
     print('BER', ber_res_punc)

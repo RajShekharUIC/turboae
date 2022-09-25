@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 # utility for Same Shape CNN 1D
 class SameShapeConv1d(torch.nn.Module):
-    def __init__(self, num_layer, in_channels, out_channels, kernel_size, activation = 'elu', no_act = False):
+    def __init__(self, num_layer, in_channels, out_channels, kernel_size, activation = 'elu', no_act = False, bias=True):
         super(SameShapeConv1d, self).__init__()
 
         self.cnns = torch.nn.ModuleList()
@@ -14,14 +14,14 @@ class SameShapeConv1d(torch.nn.Module):
             if idx == 0:
                 self.cnns.append(torch.nn.Conv1d(in_channels = in_channels, out_channels=out_channels,
                                                       kernel_size=kernel_size, stride=1, padding=(kernel_size // 2),
-                                                      dilation=1, groups=1, bias=True)
+                                                      dilation=1, groups=1, bias=bias)
                 )
             else:
                 self.cnns.append(torch.nn.Conv1d(in_channels = out_channels, out_channels=out_channels,
                                                       kernel_size=kernel_size, stride=1, padding=(kernel_size // 2),
-                                                      dilation=1, groups=1, bias=True)
+                                                      dilation=1, groups=1, bias=bias)
                 )
-
+        # print('cnns weights shape: ', self.weights.shape)
         if activation == 'elu':
             self.activation = F.elu
         elif activation == 'relu':
@@ -30,14 +30,18 @@ class SameShapeConv1d(torch.nn.Module):
             self.activation = F.selu
         elif activation == 'prelu':
             self.activation = F.prelu
+        elif activation == 'mod2':
+            self.activation = lambda x: x.to(torch.long) % 2
         else:
             self.activation = F.elu
 
     def forward(self, inputs):
         inputs = torch.transpose(inputs, 1,2)
         x = inputs
+        # print('cnn forward x: ', x)
         for idx in range(self.num_layer):
             if self.no_act:
+                # print('no act')
                 x = self.cnns[idx](x)
             else:
                 x = self.activation(self.cnns[idx](x))

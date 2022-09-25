@@ -59,6 +59,9 @@ def import_enc(args):
     elif args.encoder == 'rate3_cnn2d':
         from encoders import ENC_CNN2D as ENC
 
+    elif args.encoder == 'TurboAEBinaryLinearApproxEncoder':
+        from encoders import TurboAEBinaryLinearApproxEncoder as ENC
+
     else:
         print('Unknown Encoder, stop')
 
@@ -216,6 +219,9 @@ if __name__ == '__main__':
     # Training Processes
     #################################################
     report_loss, report_ber = [], []
+    fileName = './tmp/model_epoch_0.pt'
+    torch.save(model.state_dict(), fileName)
+    print('saved model', fileName)
 
     for epoch in range(1, args.num_epoch + 1):
 
@@ -233,8 +239,25 @@ if __name__ == '__main__':
                     train(epoch, model, dec_optimizer, args, use_cuda = use_cuda, mode ='decoder')
 
         this_loss, this_ber  = validate(model, general_optimizer, args, use_cuda = use_cuda)
+
+        # best_ber = min(report_ber) if report_ber else 1
         report_loss.append(this_loss)
         report_ber.append(this_ber)
+
+        fileName = f'./tmp/model_epoch_{epoch}.pt'
+        torch.save(model.state_dict(), fileName)
+        print('saved model', fileName)
+
+
+        # best_ber = min(report_ber)
+        # if this_ber <= best_ber:
+        #     # from datetime import datetime
+        #     print(f'Found best BER : {this_ber} . Previous best : {best_ber}')
+        #     # fileName = datetime.now().strftime('model_at%H_%M_%Son%m_%d_%Y.pt')
+        #     fileName = f'./tmp/model_ber_{this_ber}.pt'
+        #     torch.save(model.state_dict(), fileName)
+        #     print('saved model', fileName)
+
 
     if args.print_test_traj == True:
         print('test loss trajectory', report_loss)
